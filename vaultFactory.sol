@@ -22,6 +22,8 @@ contract vaultFactory {
     //////////////////////////////////////////////////////////////*/
     event ControllerChange(address _oldController, address _newController);
     event TreasuryChange(address _oldTreasury, address _newTreasury);
+    event Deposit(address _from, uint256 _marketIndex, string _side, uint256 _amount);
+    event Withdraw(address _from, uint256 _marketIndex, string _side, uint256 _amount);
 
 
     /*//////////////////////////////////////////////////////////////
@@ -29,6 +31,7 @@ contract vaultFactory {
     //////////////////////////////////////////////////////////////*/
     error Unauthorized();
     error ZeroAddress();
+    error MarketDoesNotExist();
 
 
     /*//////////////////////////////////////////////////////////////
@@ -52,6 +55,7 @@ contract vaultFactory {
         uint64 depositEnd;      /// TIMESTAMP OF THE END OF DEPOSIT PERIOD
         uint64 epochStart;      /// TIMESTAMP OF THE BEGINNING OF EPOCH
         uint64 epochEnd;        /// TIMESTAMP OF THE BEGINNING OF EPOCH
+        bool triggered;         /// STATE OF THE CONTRACT (ALIVE/TRIGGERED)
     }
 
 
@@ -77,9 +81,16 @@ contract vaultFactory {
     }
 
 
+    function marketExists(uint256 _marketIndex) internal returns(bool) {
+        return !(_marketIndex > markets.length);
+    }
+
     /*//////////////////////////////////////////////////////////////
                         CONTROLLER FUNCTIONS
     //////////////////////////////////////////////////////////////*/
+    /**
+    @notice Reverts if the caller is not the contract's controller 
+    */
     modifier _onlyController() {
         if (msg.sender != controller) {
             revert Unauthorized();
@@ -118,6 +129,50 @@ contract vaultFactory {
                             CORE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
+    /**
+    @notice Function caller sends USDC against shares in the Hedge pool
+    @param _marketIndex Index  of the wanted market
+    @param _amount Amount in USDC (18 decimals) to deposit
+    */
+    function depositHedge(uint256 _marketIndex, uint256 _amount) external returns(bool) {
+        if (!marketExists(_marketIndex)) {
+            revert MarketDoesNotExist();
+        }
+
+        IERC20(USDC).transferFrom(msg.sender, address(this), _amount);
+
+        markets[_marketIndex].Hedge.shares[msg.sender] += _amount;
+        markets[_marketIndex].Hedge.totalShares += _amount;
+
+        emit Deposit(msg.sender, _marketIndex, "HEDGE", _amount);
+
+        return true;
+    }
+
+    /**
+    @notice Function caller withdraws USDC (if the contract has been triggered)
+    @param _marketIndex Index of the wanted market
+    */
+    function withdrawHedge(uint256 _marketIndex) external returns(bool) {
+        if (!marketExists(_marketIndex)) {
+            revert MarketDoesNotExist();
+        }
+        Market memory market = markets[_marketIndex];
+
+        if (market.triggered) {
+
+        }
+        else if (market.expiration < block.timestamp) {
+
+        }
+        else {
+            revert()
+        }
+
+        emit Withdraw(msg.sender, _marketIndex, "HEDGE")
+
+        return true;
+    }
 
 
     /*//////////////////////////////////////////////////////////////
