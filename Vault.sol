@@ -14,7 +14,7 @@ contract Vault {
     address public controller;
     uint256 public marketIndex;
     mapping(address => uint256) internal shares;
-    uint256 internal totalShares;
+    uint256 public totalShares;
 
     constructor(uint256 _marketIndex) {
         controller = msg.sender;
@@ -33,8 +33,5 @@ contract Vault {
     function getSharesOf(address _user) external view returns(uint256) {
         return shares[_user];
     }
-
-    function getTotalShares() external view returns(uint256) {
-        return totalShares;
-    }
+    
 }
