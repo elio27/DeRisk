@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.16;
 
 import "./IERC20.sol";
+import "./AggregatorV3Interface.sol";
+import {Vault} from "./Vault.sol";
 
 /**
 @title Vault Factory
@@ -15,7 +17,8 @@ contract vaultFactory {
     address public controller;
     address public treasury;
     
-    Market[] internal markets;
+    Market[] public markets;
+    mapping(string => address) public oracles;
 
     /*//////////////////////////////////////////////////////////////
                             EVENTS
@@ -23,7 +26,7 @@ contract vaultFactory {
     event ControllerChange(address _oldController, address _newController);
     event TreasuryChange(address _oldTreasury, address _newTreasury);
     event Deposit(address _from, uint256 _marketIndex, string _side, uint256 _amount);
-    event Withdraw(address _from, uint256 _marketIndex, string _side, uint256 _amount);
+    event Withdraw(address _to, uint256 _marketIndex, string _side, uint256 _amount);
 
 
     /*//////////////////////////////////////////////////////////////
@@ -37,16 +40,11 @@ contract vaultFactory {
     /*//////////////////////////////////////////////////////////////
                             STRUCTS
     //////////////////////////////////////////////////////////////*/
-    struct Vault {
-        mapping(address => uint256) shares;     /// MAPPING OF USERS'S SHARES
-        uint256 totalShares;                    /// TOTAL AMOUNT OF SHARES IN THE VAULT
-    }
-
     struct Market {
         string name;            /// NAME OF THE MARKET
         string token;           /// TICKER OF THE TOKEN
-        Vault Hedge;            /// HEDGE VAULT
-        Vault Risk;             /// RISK VAULT
+        Vault Hedge;
+        Vault Risk;
         uint256 strike;         /// STRIKE PRICE
         uint256 delta;          /// DELTA
         uint256 upLimit;        /// STRIKE + DELTA
@@ -81,7 +79,7 @@ contract vaultFactory {
     }
 
 
-    function marketExists(uint256 _marketIndex) internal returns(bool) {
+    function marketExists(uint256 _marketIndex) internal view returns(bool) {
         return !(_marketIndex > markets.length);
     }
 
@@ -130,6 +128,53 @@ contract vaultFactory {
     //////////////////////////////////////////////////////////////*/
 
     /**
+    struct Market {
+        string name;            /// NAME OF THE MARKET
+        string token;           /// TICKER OF THE TOKEN
+        Vault Hedge;            /// HEDGE VAULT
+        Vault Risk;             /// RISK VAULT
+        uint256 strike;         /// STRIKE PRICE
+        uint256 delta;          /// DELTA
+        uint256 upLimit;        /// STRIKE + DELTA
+        uint256 downLimit;      /// STRIKE - DELTA
+        uint64 depositStart;    /// TIMESTAMP OF THE BEGINNING OF DEPOSIT PERIOD
+        uint64 depositEnd;      /// TIMESTAMP OF THE END OF DEPOSIT PERIOD
+        uint64 epochStart;      /// TIMESTAMP OF THE BEGINNING OF EPOCH
+        uint64 epochEnd;        /// TIMESTAMP OF THE BEGINNING OF EPOCH
+        bool triggered;         /// STATE OF THE CONTRACT (ALIVE/TRIGGERED)
+    }
+    */
+    function createMarket(
+        string memory _name,
+        string memory _token,
+        uint256 _strike,
+        uint256 _delta,
+        uint64 _depositEnd,
+        uint64 _epochStart,
+        uint64 _epochEnd
+        ) external _onlyController returns(uint256) {
+            uint256 marketIndex = markets.length;
+            Market memory market = Market(
+                _name,
+                _token,
+                new Vault(marketIndex),
+                new Vault(marketIndex),
+                _strike,
+                _delta,
+                _strike + _delta,
+                _strike - _delta,
+                uint64(block.timestamp),
+                _depositEnd,
+                _epochStart,
+                _epochEnd,
+                false
+                );
+
+            markets.push(market);
+            return marketIndex;
+        }
+
+    /**
     @notice Function caller sends USDC against shares in the Hedge pool
     @param _marketIndex Index  of the wanted market
     @param _amount Amount in USDC (18 decimals) to deposit
@@ -141,8 +186,7 @@ contract vaultFactory {
 
         IERC20(USDC).transferFrom(msg.sender, address(this), _amount);
 
-        markets[_marketIndex].Hedge.shares[msg.sender] += _amount;
-        markets[_marketIndex].Hedge.totalShares += _amount;
+        markets[_marketIndex].Hedge.addDeposit(msg.sender, _amount);
 
         emit Deposit(msg.sender, _marketIndex, "HEDGE", _amount);
 
@@ -158,18 +202,19 @@ contract vaultFactory {
             revert MarketDoesNotExist();
         }
         Market memory market = markets[_marketIndex];
+        uint256 amount;
 
         if (market.triggered) {
-
+            amount = 69;
         }
-        else if (market.expiration < block.timestamp) {
-
+        else if (market.epochEnd < block.timestamp) {
+            amount = 420;
         }
         else {
-            revert()
+            revert();
         }
 
-        emit Withdraw(msg.sender, _marketIndex, "HEDGE")
+        emit Withdraw(msg.sender, _marketIndex, "HEDGE", amount);
 
         return true;
     }
@@ -185,7 +230,7 @@ contract vaultFactory {
     @param _user Address of the wanted user
     */
     function getHedgeSharesOf(uint256 _marketIndex, address _user) external view returns(uint256) {
-        return markets[_marketIndex].Hedge.shares[_user];
+        return markets[_marketIndex].Hedge.getSharesOf(_user);
     }
 
     /**
@@ -193,7 +238,7 @@ contract vaultFactory {
     @param _marketIndex Index of the wanted market
     */
     function getHedgeTotalShares(uint256 _marketIndex) external view returns(uint256) {
-        return markets[_marketIndex].Hedge.totalShares;
+        return markets[_marketIndex].Hedge.getTotalShares();
     }
 
     /**
@@ -202,7 +247,7 @@ contract vaultFactory {
     @param _user Address of the wanted user
     */
     function getRiskSharesOf(uint256 _marketIndex, address _user) external view returns(uint256) {
-        return markets[_marketIndex].Risk.shares[_user];
+        return markets[_marketIndex].Risk.getSharesOf(_user);
     }
 
     /**
@@ -210,7 +255,7 @@ contract vaultFactory {
     @param _marketIndex Index of the wanted market
     */
     function getRiskTotalShares(uint256 _marketIndex) external view returns(uint256) {
-        return markets[_marketIndex].Risk.totalShares;
+        return markets[_marketIndex].Risk.getTotalShares();
     }
 
 }
