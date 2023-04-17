@@ -35,6 +35,7 @@ contract vaultFactory {
     error Unauthorized();
     error ZeroAddress();
     error MarketDoesNotExist();
+    error MarketIsStillActive();
 
 
     /*//////////////////////////////////////////////////////////////
@@ -83,6 +84,10 @@ contract vaultFactory {
         return !(_marketIndex > markets.length);
     }
 
+    function isActive(uint256 _marketIndex) internal view returns(bool) {
+        return (block.timestamp >= markets[_marketIndex].epochStart) && (block.timestamp < markets[_marketIndex].epochEnd) && !markets[_marketIndex].triggered;
+    }
+
     /*//////////////////////////////////////////////////////////////
                         CONTROLLER FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -128,21 +133,14 @@ contract vaultFactory {
     //////////////////////////////////////////////////////////////*/
 
     /**
-    struct Market {
-        string name;            /// NAME OF THE MARKET
-        string token;           /// TICKER OF THE TOKEN
-        Vault Hedge;            /// HEDGE VAULT
-        Vault Risk;             /// RISK VAULT
-        uint256 strike;         /// STRIKE PRICE
-        uint256 delta;          /// DELTA
-        uint256 upLimit;        /// STRIKE + DELTA
-        uint256 downLimit;      /// STRIKE - DELTA
-        uint64 depositStart;    /// TIMESTAMP OF THE BEGINNING OF DEPOSIT PERIOD
-        uint64 depositEnd;      /// TIMESTAMP OF THE END OF DEPOSIT PERIOD
-        uint64 epochStart;      /// TIMESTAMP OF THE BEGINNING OF EPOCH
-        uint64 epochEnd;        /// TIMESTAMP OF THE BEGINNING OF EPOCH
-        bool triggered;         /// STATE OF THE CONTRACT (ALIVE/TRIGGERED)
-    }
+    @notice Create a new Market
+    @param _name Name of the market
+    @param _token Ticker of the token
+    @param _strike Strike price of the contract
+    @param _delta Delta of the contract
+    @param _depositEnd Timestamp of the end of the deposit period
+    @param _epochStart Timestamp of the beginning of the activity of the contract
+    @param _epochEnd Timestamp of the expiration od the contract
     */
     function createMarket(
         string memory _name,
@@ -200,6 +198,9 @@ contract vaultFactory {
     function withdrawHedge(uint256 _marketIndex) external returns(bool) {
         if (!marketExists(_marketIndex)) {
             revert MarketDoesNotExist();
+        }
+        if (isActive(_marketIndex)) {
+            revert MarketIsStillActive();
         }
         Market memory market = markets[_marketIndex];
         uint256 amount;
