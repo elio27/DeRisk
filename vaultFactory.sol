@@ -36,6 +36,8 @@ contract vaultFactory {
     error ZeroAddress();
     error MarketDoesNotExist();
     error MarketIsStillActive();
+    error MarketHasNotStarted();
+    error NothingToClaim();
 
 
     /*//////////////////////////////////////////////////////////////
@@ -85,7 +87,13 @@ contract vaultFactory {
     }
 
     function isActive(uint256 _marketIndex) internal view returns(bool) {
-        return (block.timestamp >= markets[_marketIndex].epochStart) && (block.timestamp < markets[_marketIndex].epochEnd) && !markets[_marketIndex].triggered;
+        Market memory market = markets[_marketIndex];
+        return (block.timestamp >= market.epochStart) && (block.timestamp < market.epochEnd) && !market.triggered;
+    }
+
+    function isTriggeredOrExpired(uint256 _marketIndex) internal view returns(bool) {
+        Market memory market = markets[_marketIndex];
+        return market.triggered || (block.timestamp >= market.epochEnd);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -199,22 +207,23 @@ contract vaultFactory {
         if (!marketExists(_marketIndex)) {
             revert MarketDoesNotExist();
         }
-        if (isActive(_marketIndex)) {
+
+        if (!isTriggeredOrExpired(_marketIndex)) {
             revert MarketIsStillActive();
         }
+
         Market memory market = markets[_marketIndex];
         uint256 amount;
 
         if (market.triggered) {
-            amount = 69;
-        }
-        else if (market.epochEnd < block.timestamp) {
-            amount = 420;
+            amount = market.Hedge.getSharesOf(msg.sender) * market.Risk.totalShares() / market.Hedge.totalShares();
         }
         else {
-            revert();
+            revert NothingToClaim();
         }
 
+        market.Hedge.addWithdrawal(msg.sender, amount);
+        IERC20(USDC).transfer(msg.sender, amount);
         emit Withdraw(msg.sender, _marketIndex, "HEDGE", amount);
 
         return true;
@@ -239,7 +248,7 @@ contract vaultFactory {
     @param _marketIndex Index of the wanted market
     */
     function getHedgeTotalShares(uint256 _marketIndex) external view returns(uint256) {
-        return markets[_marketIndex].Hedge.getTotalShares();
+        return markets[_marketIndex].Hedge.totalShares();
     }
 
     /**
@@ -256,7 +265,7 @@ contract vaultFactory {
     @param _marketIndex Index of the wanted market
     */
     function getRiskTotalShares(uint256 _marketIndex) external view returns(uint256) {
-        return markets[_marketIndex].Risk.getTotalShares();
+        return markets[_marketIndex].Risk.totalShares();
     }
 
 }
