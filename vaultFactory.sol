@@ -18,7 +18,7 @@ contract vaultFactory {
     address public treasury;
     
     Market[] public markets;
-    mapping(string => address) public oracles;
+    mapping(string => Oracle) public oracles;
 
     /*//////////////////////////////////////////////////////////////
                             EVENTS
@@ -44,19 +44,24 @@ contract vaultFactory {
                             STRUCTS
     //////////////////////////////////////////////////////////////*/
     struct Market {
-        string name;            /// NAME OF THE MARKET
-        string token;           /// TICKER OF THE TOKEN
-        Vault Hedge;
-        Vault Risk;
+        string  name;            /// NAME OF THE MARKET
+        string  token;           /// TICKER OF THE TOKEN
+        Vault   Hedge;
+        Vault   Risk;
         uint256 strike;         /// STRIKE PRICE
         uint256 delta;          /// DELTA
         uint256 upLimit;        /// STRIKE + DELTA
         uint256 downLimit;      /// STRIKE - DELTA
-        uint64 depositStart;    /// TIMESTAMP OF THE BEGINNING OF DEPOSIT PERIOD
-        uint64 depositEnd;      /// TIMESTAMP OF THE END OF DEPOSIT PERIOD
-        uint64 epochStart;      /// TIMESTAMP OF THE BEGINNING OF EPOCH
-        uint64 epochEnd;        /// TIMESTAMP OF THE BEGINNING OF EPOCH
-        bool triggered;         /// STATE OF THE CONTRACT (ALIVE/TRIGGERED)
+        uint64  depositStart;   /// TIMESTAMP OF THE BEGINNING OF DEPOSIT PERIOD
+        uint64  depositEnd;     /// TIMESTAMP OF THE END OF DEPOSIT PERIOD
+        uint64  epochStart;     /// TIMESTAMP OF THE BEGINNING OF EPOCH
+        uint64  epochEnd;       /// TIMESTAMP OF THE BEGINNING OF EPOCH
+        bool    triggered;      /// STATE OF THE CONTRACT (ALIVE/TRIGGERED)
+    }
+
+    struct Oracle {
+        address oracleAddress;  /// ADDRESS OF THE PRICE FEED
+        uint256 decimals;       /// DECIMALS OF THE PRICE FEED
     }
 
 
@@ -82,8 +87,16 @@ contract vaultFactory {
     }
 
 
+    /*//////////////////////////////////////////////////////////////
+                        HELPER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
     function marketExists(uint256 _marketIndex) internal view returns(bool) {
         return !(_marketIndex > markets.length);
+    }
+
+    function tokenExists(string memory _token) internal view returns(bool) {
+        return oracles[_token].oracleAddress != address(0);
     }
 
     function isActive(uint256 _marketIndex) internal view returns(bool) {
@@ -91,10 +104,26 @@ contract vaultFactory {
         return (block.timestamp >= market.epochStart) && (block.timestamp < market.epochEnd) && !market.triggered;
     }
 
-    function isTriggeredOrExpired(uint256 _marketIndex) internal view returns(bool) {
-        Market memory market = markets[_marketIndex];
-        return market.triggered || (block.timestamp >= market.epochEnd);
+    function isTriggered(uint256 _marketIndex) internal view returns(bool) {
+        return markets[_marketIndex].triggered;
     }
+
+    function isExpired(uint256 _marketIndex) internal view returns(bool) {
+        return block.timestamp >= markets[_marketIndex].epochEnd;
+    }
+
+    function isTriggeredOrExpired(uint256 _marketIndex) internal view returns(bool) {
+        return isTriggered(_marketIndex) || isExpired(_marketIndex);
+    }
+
+    function getPrice(string memory _token) internal view returns(uint256, uint256) {
+        Oracle memory priceFeed = oracles[_token];
+
+        (, int256 p, , , ) = AggregatorV3Interface(priceFeed.oracleAddress).latestRoundData();
+
+        return (uint256(p), priceFeed.decimals);
+    }
+
 
     /*//////////////////////////////////////////////////////////////
                         CONTROLLER FUNCTIONS
@@ -117,6 +146,7 @@ contract vaultFactory {
         if (_controller == address(0)) {
             revert ZeroAddress();
         }
+
         address oldController = controller;
         controller = _controller;
         emit ControllerChange(oldController, _controller);
@@ -130,11 +160,25 @@ contract vaultFactory {
         if (_treasury == address(0)) {
             revert ZeroAddress();
         }
+
         address oldTreasury = treasury;
         treasury = _treasury;
         emit TreasuryChange(oldTreasury, _treasury);
     }
 
+    /**
+    @notice Add a new oracle
+    @param _token Ticker of the token
+    @param _oracleAddress Address of the new pricefeed
+    @param _decimals Decimals of the pricefeed
+    */
+    function addOracle(string memory _token, address _oracleAddress, uint256 _decimals) external _onlyController {
+        if (_oracleAddress == address(0)) {
+            revert ZeroAddress();
+        }
+
+        oracles[_token] = Oracle(_oracleAddress, _decimals);
+    }
 
     /*//////////////////////////////////////////////////////////////
                             CORE FUNCTIONS
@@ -195,6 +239,56 @@ contract vaultFactory {
         markets[_marketIndex].Hedge.addDeposit(msg.sender, _amount);
 
         emit Deposit(msg.sender, _marketIndex, "HEDGE", _amount);
+
+        return true;
+    }
+
+    /**
+    @notice Function caller sends USDC against shares in the Risk pool
+    @param _marketIndex Index  of the wanted market
+    @param _amount Amount in USDC (18 decimals) to deposit
+    */
+    function depositRisk(uint256 _marketIndex, uint256 _amount) external returns(bool) {
+        if (!marketExists(_marketIndex)) {
+            revert MarketDoesNotExist();
+        }
+
+        IERC20(USDC).transferFrom(msg.sender, address(this), _amount);
+
+        markets[_marketIndex].Risk.addDeposit(msg.sender, _amount);
+
+        emit Deposit(msg.sender, _marketIndex, "RISK", _amount);
+
+        return true;
+    }
+
+    /**
+    @notice Function caller withdraws risk Hedgor's premium in USDC (if the contract has not been triggered)
+    @param _marketIndex Index of the wanted market
+    */
+    function withdrawRisk(uint256 _marketIndex) external returns(bool) {
+        if (!marketExists(_marketIndex)) {
+            revert MarketDoesNotExist();
+        }
+
+        if (!isExpired(_marketIndex)) {
+            revert MarketIsStillActive();
+        }
+        
+        Market memory market = markets[_marketIndex];
+        uint256 amount;
+
+        if (market.triggered) {
+            revert NothingToClaim();
+        }
+        else {
+            amount = market.Risk.getSharesOf(msg.sender) * market.Hedge.totalShares() / market.Risk.totalShares();
+            amount += market.Risk.getSharesOf(msg.sender);
+        }
+
+        market.Risk.addWithdrawal(msg.sender, amount);
+        IERC20(USDC).transfer(msg.sender, amount);
+        emit Withdraw(msg.sender, _marketIndex, "Risk", amount);
 
         return true;
     }
