@@ -27,6 +27,7 @@ contract vaultFactory {
     event TreasuryChange(address _oldTreasury, address _newTreasury);
     event Deposit(address _from, uint256 _marketIndex, string _side, uint256 _amount);
     event Withdraw(address _to, uint256 _marketIndex, string _side, uint256 _amount);
+    event Trigger(uint256 _marketIndex, uint256 _timestamp);
 
 
     /*//////////////////////////////////////////////////////////////
@@ -36,8 +37,10 @@ contract vaultFactory {
     error ZeroAddress();
     error MarketDoesNotExist();
     error MarketIsStillActive();
+    error MarketIsInactive();
     error MarketHasNotStarted();
     error NothingToClaim();
+    error PriceInRange();
 
 
     /*//////////////////////////////////////////////////////////////
@@ -46,6 +49,7 @@ contract vaultFactory {
     struct Market {
         string  name;            /// NAME OF THE MARKET
         string  token;           /// TICKER OF THE TOKEN
+        uint256 decimals;       /// AMOUNT OF DECIMALS USED FOR THE STRIKE PRICE AND THE DELTA
         Vault   Hedge;
         Vault   Risk;
         uint256 strike;         /// STRIKE PRICE
@@ -92,7 +96,7 @@ contract vaultFactory {
     //////////////////////////////////////////////////////////////*/
 
     function marketExists(uint256 _marketIndex) internal view returns(bool) {
-        return !(_marketIndex > markets.length);
+        return _marketIndex < markets.length;
     }
 
     function tokenExists(string memory _token) internal view returns(bool) {
@@ -116,6 +120,10 @@ contract vaultFactory {
         return isTriggered(_marketIndex) || isExpired(_marketIndex);
     }
 
+
+    /*//////////////////////////////////////////////////////////////
+                        ORACLE FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
     function getPrice(string memory _token) internal view returns(uint256, uint256) {
         Oracle memory priceFeed = oracles[_token];
 
@@ -124,6 +132,29 @@ contract vaultFactory {
         return (uint256(p), priceFeed.decimals);
     }
 
+    function trigger(uint256 _marketIndex) external {
+        if (!marketExists(_marketIndex)) {
+            revert MarketDoesNotExist();
+        }
+        if (!isActive(_marketIndex)) {
+            revert MarketIsInactive();
+        }
+        
+        Market memory market = markets[_marketIndex];
+        (uint256 price, uint256 decimals) = getPrice(market.token);
+
+        above = price*market.decimals > market.upLimit*decimals;
+        under = price*market.decimals < market.downLimit*decimals;
+
+        if (above || under) {
+            markets[_marketIndex].triggered = true;
+            emit Trigger(_marketIndex, block.timestamp);
+        }
+        else {
+            revert PriceInRange();
+        }
+        
+    }
 
     /*//////////////////////////////////////////////////////////////
                         CONTROLLER FUNCTIONS
@@ -188,6 +219,7 @@ contract vaultFactory {
     @notice Create a new Market
     @param _name Name of the market
     @param _token Ticker of the token
+    @param _decimals Number of decimals used
     @param _strike Strike price of the contract
     @param _delta Delta of the contract
     @param _depositEnd Timestamp of the end of the deposit period
@@ -197,6 +229,7 @@ contract vaultFactory {
     function createMarket(
         string memory _name,
         string memory _token,
+        uint256 _decimals,
         uint256 _strike,
         uint256 _delta,
         uint64 _depositEnd,
@@ -207,6 +240,7 @@ contract vaultFactory {
             Market memory market = Market(
                 _name,
                 _token,
+                _decimals,
                 new Vault(marketIndex),
                 new Vault(marketIndex),
                 _strike,
@@ -276,13 +310,9 @@ contract vaultFactory {
         }
         
         Market memory market = markets[_marketIndex];
-        uint256 amount;
+        uint256 amount = market.Risk.getSharesOf(msg.sender) * market.Hedge.totalShares() / market.Risk.totalShares();
 
         if (market.triggered) {
-            revert NothingToClaim();
-        }
-        else {
-            amount = market.Risk.getSharesOf(msg.sender) * market.Hedge.totalShares() / market.Risk.totalShares();
             amount += market.Risk.getSharesOf(msg.sender);
         }
 
